@@ -148,22 +148,49 @@ func (s *Server) insertFormObject(r *http.Request) xmlResponse {
 }
 
 func (s *Server) checkUploadPreconditions(r *http.Request, bucketName string, objectName string) *jsonResponse {
-	ifGenerationMatch := r.URL.Query().Get("ifGenerationMatch")
-
-	if ifGenerationMatch == "0" {
-		if _, err := s.backend.GetObject(bucketName, objectName); err == nil {
-			return &jsonResponse{
-				status:       http.StatusPreconditionFailed,
-				errorMessage: "Precondition failed",
-			}
-		}
-	} else if ifGenerationMatch != "" || r.URL.Query().Get("ifGenerationNotMatch") != "" {
+	if r.URL.Query().Get("ifGenerationNotMatch") != "" {
 		return &jsonResponse{
 			status:       http.StatusNotImplemented,
 			errorMessage: "Precondition support not implemented",
 		}
 	}
 
+	ifGenerationMatch := r.URL.Query().Get("ifGenerationMatch")
+	if ifGenerationMatch == "" {
+		return nil
+	}
+
+	obj, err := s.backend.GetObject(bucketName, objectName)
+
+	switch ifGenerationMatch {
+	case "0":
+		if err == nil {
+			return &jsonResponse{
+				status:       http.StatusPreconditionFailed,
+				errorMessage: "Precondition failed",
+			}
+		}
+	default:
+		if err != nil {
+			return &jsonResponse{
+				status:       http.StatusInternalServerError,
+				errorMessage: "Error fetching object",
+			}
+		}
+		generationNumber, err := strconv.ParseInt(ifGenerationMatch, 10, 64)
+		if err != nil {
+			return &jsonResponse{
+				status:       http.StatusBadRequest,
+				errorMessage: "ifGenerationMatch not a valid int64",
+			}
+		}
+		if generationNumber != obj.Generation {
+			return &jsonResponse{
+				status:       http.StatusPreconditionFailed,
+				errorMessage: "Precondition failed",
+			}
+		}
+	}
 	return nil
 }
 
