@@ -5,6 +5,7 @@
 package backend
 
 import (
+	"cloud.google.com/go/storage"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,26 +31,44 @@ type bucketInMemory struct {
 	activeObjects   []Object
 	archivedObjects []Object
 }
+type DoesNotExistPreConditionError struct{}
+
+func (d *DoesNotExistPreConditionError) Error() string {
+	return "DoesNotExist - Precondition failed"
+}
+
+type GenerationMatchPreConditionError struct{}
+
+func (d *GenerationMatchPreConditionError) Error() string {
+	return "GenerationMatch - Precondition failed"
+}
 
 func newBucketInMemory(name string, versioningEnabled bool) bucketInMemory {
 	return bucketInMemory{Bucket{name, versioningEnabled, time.Now()}, []Object{}, []Object{}}
 }
 
-func (bm *bucketInMemory) addObject(obj Object) Object {
+func (bm *bucketInMemory) addObject(obj Object, conditions storage.Conditions) (Object, error) {
 	obj.Size = int64(len(obj.Content))
 	obj.Generation = getNewGenerationIfZero(obj.Generation)
 	index := findObject(obj, bm.activeObjects, false)
 	if index >= 0 {
+		if conditions.DoesNotExist {
+			return obj, &DoesNotExistPreConditionError{}
+		}
+		if conditions.GenerationMatch > 0 && conditions.GenerationMatch != bm.activeObjects[index].Generation {
+			return obj, &GenerationMatchPreConditionError{}
+		}
 		if bm.VersioningEnabled {
 			bm.activeObjects[index].Deleted = time.Now().Format(timestampFormat)
 			bm.cpToArchive(bm.activeObjects[index])
 		}
+
 		bm.activeObjects[index] = obj
 	} else {
 		bm.activeObjects = append(bm.activeObjects, obj)
 	}
 
-	return obj
+	return obj, nil
 }
 
 func getNewGenerationIfZero(generation int64) int64 {
@@ -117,7 +136,7 @@ func NewStorageMemory(objects []Object) Storage {
 	for _, o := range objects {
 		s.CreateBucket(o.BucketName, false)
 		bucket := s.buckets[o.BucketName]
-		bucket.addObject(o)
+		bucket.addObject(o, storage.Conditions{})
 		s.buckets[o.BucketName] = bucket
 	}
 	return s
@@ -181,14 +200,17 @@ func (s *storageMemory) DeleteBucket(name string) error {
 }
 
 // CreateObject stores an object in the backend.
-func (s *storageMemory) CreateObject(obj Object) (Object, error) {
+func (s *storageMemory) CreateObject(obj Object, conditions storage.Conditions) (Object, error) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	bucketInMemory, err := s.getBucketInMemory(obj.BucketName)
 	if err != nil {
 		bucketInMemory = newBucketInMemory(obj.BucketName, false)
 	}
-	newObj := bucketInMemory.addObject(obj)
+	newObj, err := bucketInMemory.addObject(obj, conditions)
+	if err != nil {
+		return newObj, err
+	}
 	s.buckets[obj.BucketName] = bucketInMemory
 	return newObj, nil
 }
@@ -268,7 +290,7 @@ func (s *storageMemory) DeleteObject(bucketName, objectName string) error {
 }
 
 // PatchObject updates an object metadata.
-func (s *storageMemory) PatchObject(bucketName, objectName string, metadata map[string]string) (Object, error) {
+func (s *storageMemory) PatchObject(bucketName, objectName string, metadata map[string]string, conditions storage.Conditions) (Object, error) {
 	obj, err := s.GetObject(bucketName, objectName)
 	if err != nil {
 		return Object{}, err
@@ -279,12 +301,12 @@ func (s *storageMemory) PatchObject(bucketName, objectName string, metadata map[
 	for k, v := range metadata {
 		obj.Metadata[k] = v
 	}
-	s.CreateObject(obj) // recreate object
-	return obj, nil
+	_, err = s.CreateObject(obj, conditions) // recreate object
+	return obj, err
 }
 
 // UpdateObject replaces an object metadata.
-func (s *storageMemory) UpdateObject(bucketName, objectName string, metadata map[string]string) (Object, error) {
+func (s *storageMemory) UpdateObject(bucketName, objectName string, metadata map[string]string, conditions storage.Conditions) (Object, error) {
 	obj, err := s.GetObject(bucketName, objectName)
 	if err != nil {
 		return Object{}, err
@@ -293,11 +315,14 @@ func (s *storageMemory) UpdateObject(bucketName, objectName string, metadata map
 	for k, v := range metadata {
 		obj.Metadata[k] = v
 	}
-	s.CreateObject(obj) // recreate object
-	return obj, nil
+	_, err = s.CreateObject(obj, conditions) // recreate object
+	if err != nil {
+		return Object{}, err
+	}
+	return obj, err
 }
 
-func (s *storageMemory) ComposeObject(bucketName string, objectNames []string, destinationName string, metadata map[string]string, contentType string) (Object, error) {
+func (s *storageMemory) ComposeObject(bucketName string, objectNames []string, destinationName string, metadata map[string]string, contentType string, conditions storage.Conditions) (Object, error) {
 	var data []byte
 	for _, n := range objectNames {
 		obj, err := s.GetObject(bucketName, n)
@@ -324,7 +349,7 @@ func (s *storageMemory) ComposeObject(bucketName string, objectNames []string, d
 	dest.Md5Hash = checksum.EncodedMd5Hash(data)
 	dest.Metadata = metadata
 
-	result, err := s.CreateObject(dest)
+	result, err := s.CreateObject(dest, conditions)
 	if err != nil {
 		return result, err
 	}

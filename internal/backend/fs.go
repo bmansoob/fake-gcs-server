@@ -5,6 +5,7 @@
 package backend
 
 import (
+	"cloud.google.com/go/storage"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,7 +48,7 @@ func NewStorageFS(objects []Object, rootDir string) (Storage, error) {
 	}
 	s := &storageFS{rootDir: rootDir}
 	for _, o := range objects {
-		_, err := s.CreateObject(o)
+		_, err := s.CreateObject(o, storage.Conditions{})
 		if err != nil {
 			return nil, err
 		}
@@ -124,8 +125,8 @@ func (s *storageFS) DeleteBucket(name string) error {
 }
 
 // CreateObject stores an object as a regular file in the disk.
-func (s *storageFS) CreateObject(obj Object) (Object, error) {
-	if obj.Generation > 0 {
+func (s *storageFS) CreateObject(obj Object, conditions storage.Conditions) (Object, error) {
+	if obj.Generation > 0 || conditions != (storage.Conditions{}) {
 		return Object{}, errors.New("not implemented: fs storage type does not support objects generation yet")
 	}
 	s.mtx.Lock()
@@ -213,7 +214,7 @@ func (s *storageFS) DeleteObject(bucketName, objectName string) error {
 }
 
 // PatchObject patches the given object metadata.
-func (s *storageFS) PatchObject(bucketName, objectName string, metadata map[string]string) (Object, error) {
+func (s *storageFS) PatchObject(bucketName, objectName string, metadata map[string]string, conditions storage.Conditions) (Object, error) {
 	obj, err := s.GetObject(bucketName, objectName)
 	if err != nil {
 		return Object{}, err
@@ -224,12 +225,12 @@ func (s *storageFS) PatchObject(bucketName, objectName string, metadata map[stri
 	for k, v := range metadata {
 		obj.Metadata[k] = v
 	}
-	s.CreateObject(obj) // recreate object
+	s.CreateObject(obj, conditions) // recreate object
 	return obj, nil
 }
 
 // UpdateObject replaces the given object metadata.
-func (s *storageFS) UpdateObject(bucketName, objectName string, metadata map[string]string) (Object, error) {
+func (s *storageFS) UpdateObject(bucketName, objectName string, metadata map[string]string, conditions storage.Conditions) (Object, error) {
 	obj, err := s.GetObject(bucketName, objectName)
 	if err != nil {
 		return Object{}, err
@@ -238,11 +239,11 @@ func (s *storageFS) UpdateObject(bucketName, objectName string, metadata map[str
 	for k, v := range metadata {
 		obj.Metadata[k] = v
 	}
-	s.CreateObject(obj) // recreate object
+	s.CreateObject(obj, conditions) // recreate object
 	return obj, nil
 }
 
-func (s *storageFS) ComposeObject(bucketName string, objectNames []string, destinationName string, metadata map[string]string, contentType string) (Object, error) {
+func (s *storageFS) ComposeObject(bucketName string, objectNames []string, destinationName string, metadata map[string]string, contentType string, conditions storage.Conditions) (Object, error) {
 	var data []byte
 	for _, n := range objectNames {
 		obj, err := s.GetObject(bucketName, n)
@@ -270,7 +271,7 @@ func (s *storageFS) ComposeObject(bucketName string, objectNames []string, desti
 	dest.Md5Hash = checksum.EncodedMd5Hash(data)
 	dest.Metadata = metadata
 
-	result, err := s.CreateObject(dest)
+	result, err := s.CreateObject(dest, storage.Conditions{})
 	if err != nil {
 		return result, err
 	}

@@ -204,7 +204,7 @@ func TestServerClientObjectAttrsAfterCreateObject(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		runServersTest(t, nil, func(t *testing.T, server *Server) {
-			server.CreateObject(test.obj)
+			server.CreateObject(test.obj, storage.Conditions{})
 			client := server.Client()
 			objHandle := client.Bucket(test.obj.BucketName).Object(test.obj.Name)
 			attrs, err := objHandle.Attrs(context.TODO())
@@ -230,7 +230,7 @@ func TestServerClientObjectAttrsAfterOverwriteWithVersioning(t *testing.T) {
 			Content:     []byte(content),
 			ObjectAttrs: ObjectAttrs{BucketName: bucketName, Name: "img/low-res/party-01.jpg", ContentType: contentType, Crc32c: checksum.EncodedChecksum(uint32ToBytes(uint32Checksum([]byte(content)))), Md5Hash: checksum.EncodedHash(checksum.MD5Hash([]byte(content))), Metadata: map[string]string{"MetaHeader": metaValue}},
 		}
-		server.CreateObject(initialObj)
+		server.CreateObject(initialObj, storage.Conditions{})
 		client := server.Client()
 		objHandle := client.Bucket(bucketName).Object(initialObj.Name)
 		originalObjAttrs, err := objHandle.Attrs(context.TODO())
@@ -247,7 +247,7 @@ func TestServerClientObjectAttrsAfterOverwriteWithVersioning(t *testing.T) {
 			Content:     []byte(content2),
 			ObjectAttrs: ObjectAttrs{BucketName: bucketName, Name: "img/low-res/party-01.jpg", ContentType: contentType, Crc32c: checksum.EncodedChecksum(uint32ToBytes(uint32Checksum([]byte(content2)))), Md5Hash: checksum.EncodedHash(checksum.MD5Hash([]byte(content2)))},
 		}
-		server.CreateObject(latestObjVersion)
+		server.CreateObject(latestObjVersion, storage.Conditions{})
 		objHandle = client.Bucket(bucketName).Object(latestObjVersion.Name)
 		latestAttrs, err := objHandle.Attrs(context.TODO())
 		if err != nil {
@@ -447,7 +447,7 @@ func TestServerClientObjectReaderAfterCreateObject(t *testing.T) {
 				ContentType: contentType,
 			},
 			Content: []byte(content),
-		})
+		}, storage.Conditions{})
 		client := server.Client()
 		objHandle := client.Bucket(bucketName).Object(objectName)
 		reader, err := objHandle.NewReader(context.TODO())
@@ -487,7 +487,7 @@ func TestServerClientObjectReaderAgainstSpecificGenerations(t *testing.T) {
 			},
 			Content: []byte(content),
 		}
-		server.CreateObject(object1)
+		server.CreateObject(object1, storage.Conditions{})
 		object2 := Object{
 			ObjectAttrs: ObjectAttrs{
 				BucketName:  bucketName,
@@ -496,7 +496,8 @@ func TestServerClientObjectReaderAgainstSpecificGenerations(t *testing.T) {
 			},
 			Content: []byte(content + "2"),
 		}
-		server.CreateObject(object2)
+
+		server.CreateObject(object2, storage.Conditions{})
 		client := server.Client()
 		latestHandle := client.Bucket(bucketName).Object(objectName)
 		latestAttrs, err := latestHandle.Attrs(context.TODO())
@@ -781,10 +782,10 @@ func TestServerClientListAfterCreate(t *testing.T) {
 					})
 				}
 				for _, obj := range getObjectsForListTests() {
-					server.CreateObject(obj)
+					server.CreateObject(obj, storage.Conditions{})
 					if withOverwrites {
 						obj.Content = []byte("final content")
-						server.CreateObject(obj)
+						server.CreateObject(obj, storage.Conditions{})
 					}
 				}
 				tests := getTestCasesForListTests(versioningEnabled, withOverwrites)
@@ -959,11 +960,11 @@ func TestServerClientListAfterCreateQueryingAllVersions(t *testing.T) {
 			}
 			for _, obj := range getObjectsForListTests() {
 				obj.Generation = initialGeneration
-				server.CreateObject(obj)
+				server.CreateObject(obj, storage.Conditions{})
 				if test.withOverwrites {
 					obj.Generation = finalGeneration
 					obj.Content = []byte("final content")
-					server.CreateObject(obj)
+					server.CreateObject(obj, storage.Conditions{})
 				}
 			}
 			client := server.Client()
@@ -1186,7 +1187,7 @@ func TestServiceClientRewriteObjectWithGenerations(t *testing.T) {
 				server.CreateBucketWithOpts(CreateBucketOpts{Name: "empty-bucket", VersioningEnabled: false})
 				server.CreateBucketWithOpts(CreateBucketOpts{Name: "first-bucket", VersioningEnabled: test.versioning})
 				for _, obj := range objs {
-					server.CreateObject(obj)
+					server.CreateObject(obj, storage.Conditions{})
 				}
 				client := server.Client()
 				sourceObject := client.Bucket("first-bucket").Object("files/some-file.txt").Generation(overwrittenGeneration)
@@ -1271,7 +1272,7 @@ func TestServerClientObjectDeleteWithVersioning(t *testing.T) {
 
 	runServersTest(t, nil, func(t *testing.T, server *Server) {
 		server.CreateBucketWithOpts(CreateBucketOpts{Name: obj.BucketName, VersioningEnabled: true})
-		server.CreateObject(obj)
+		server.CreateObject(obj, storage.Conditions{})
 
 		client := server.Client()
 		objHandle := client.Bucket(obj.BucketName).Object(obj.Name)

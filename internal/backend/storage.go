@@ -5,6 +5,8 @@
 // Package backend proides the backends used by fake-gcs-server.
 package backend
 
+import "cloud.google.com/go/storage"
+
 // Storage is the generic interface for implementing the backend storage of the
 // server.
 type Storage interface {
@@ -12,14 +14,14 @@ type Storage interface {
 	ListBuckets() ([]Bucket, error)
 	GetBucket(name string) (Bucket, error)
 	DeleteBucket(name string) error
-	CreateObject(obj Object) (Object, error)
+	CreateObject(obj Object, conditions storage.Conditions) (Object, error)
 	ListObjects(bucketName string, prefix string, versions bool) ([]ObjectAttrs, error)
 	GetObject(bucketName, objectName string) (Object, error)
 	GetObjectWithGeneration(bucketName, objectName string, generation int64) (Object, error)
 	DeleteObject(bucketName, objectName string) error
-	PatchObject(bucketName, objectName string, metadata map[string]string) (Object, error)
-	UpdateObject(bucketName, objectName string, metadata map[string]string) (Object, error)
-	ComposeObject(bucketName string, objectNames []string, destinationName string, metadata map[string]string, contentType string) (Object, error)
+	PatchObject(bucketName, objectName string, metadata map[string]string, conditions storage.Conditions) (Object, error)
+	UpdateObject(bucketName, objectName string, metadata map[string]string, conditions storage.Conditions) (Object, error)
+	ComposeObject(bucketName string, objectNames []string, destinationName string, metadata map[string]string, contentType string, conditions storage.Conditions) (Object, error)
 }
 
 type Error string

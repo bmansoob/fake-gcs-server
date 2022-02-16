@@ -138,7 +138,7 @@ func TestServerClientObjectWriterOverwrite(t *testing.T) {
 				ContentType: "some-stff",
 			},
 			Content: []byte("some content"),
-		})
+		}, storage.Conditions{})
 		objHandle := server.Client().Bucket("some-bucket").Object("some-object.txt")
 		w := objHandle.NewWriter(context.Background())
 		w.ContentType = contentType
@@ -215,6 +215,76 @@ func TestServerClientObjectWriterWithDoesNotExistPrecondition(t *testing.T) {
 		}
 		if string(objectContentAfterFailedPrecondition) != originalContent {
 			t.Errorf("wrong content in the object after failed precondition\nwant %q\ngot  %q", originalContent, string(objectContentAfterFailedPrecondition))
+		}
+	})
+}
+
+func TestServerClientObjectWriterWithGenerationNumber(t *testing.T) {
+	runServersTest(t, nil, func(t *testing.T, server *Server) {
+		const originalContent = "original content"
+		const originalContentType = "text/plain"
+		const bucketName = "some-bucket"
+		const objectName = "some-object-2.txt"
+
+		bucket := server.Client().Bucket(bucketName)
+		if err := bucket.Create(context.Background(), "my-project", nil); err != nil {
+			t.Fatal(err)
+		}
+
+		objHandle := bucket.Object(objectName)
+
+		firstWriter := objHandle.If(storage.Conditions{DoesNotExist: true}).NewWriter(context.Background())
+		firstWriter.ContentType = originalContentType
+		firstWriter.Write([]byte(originalContent))
+		if err := firstWriter.Close(); err != nil {
+			t.Fatal(err)
+		}
+		conditions := storage.Conditions{GenerationMatch: firstWriter.Attrs().Generation}
+		secondWriter := objHandle.If(conditions).NewWriter(context.Background())
+		secondWriter.Metadata = map[string]string{
+			"data": "metadata",
+		}
+		secondWriter.ContentType = "application/json"
+		secondWriter.Write([]byte("new content"))
+		err := secondWriter.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestServerClientObjectWriterWithGenerationFailingTest(t *testing.T) {
+	runServersTest(t, nil, func(t *testing.T, server *Server) {
+		const originalContent = "original content"
+		const originalContentType = "text/plain"
+		const bucketName = "some-bucket"
+		const objectName = "some-object-2.txt"
+
+		bucket := server.Client().Bucket(bucketName)
+		if err := bucket.Create(context.Background(), "my-project", nil); err != nil {
+			t.Fatal(err)
+		}
+
+		objHandle := bucket.Object(objectName)
+
+		firstWriter := objHandle.If(storage.Conditions{DoesNotExist: true}).NewWriter(context.Background())
+		firstWriter.ContentType = originalContentType
+		firstWriter.Write([]byte(originalContent))
+		if err := firstWriter.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		secondWriter := objHandle.If(storage.Conditions{GenerationMatch: firstWriter.Attrs().Generation}).NewWriter(context.Background())
+		secondWriter.ContentType = "application/json"
+		secondWriter.Write([]byte("new content"))
+
+		thirdWriter := objHandle.NewWriter(context.Background())
+		thirdWriter.ContentType = "application/json"
+		thirdWriter.Write([]byte("new content - third writer"))
+		thirdWriter.Close()
+		err := secondWriter.Close()
+		if err == nil || !strings.ContainsAny("GenerationMatch precondition failed", err.Error()) {
+			t.Fatal("Should return GenerationMatch error")
 		}
 	})
 }

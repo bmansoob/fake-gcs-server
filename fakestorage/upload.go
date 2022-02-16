@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"github.com/fsouza/fake-gcs-server/internal/backend"
 	"io"
 	"io/ioutil"
 	"mime"
@@ -140,30 +141,24 @@ func (s *Server) insertFormObject(r *http.Request) xmlResponse {
 		},
 		Content: data,
 	}
-	obj, err = s.createObject(obj)
+	conditions, err := storageConditions(r)
+	if err != nil {
+		return xmlResponse{errorMessage: err.Error()}
+	}
+	obj, err = s.createObject(obj, conditions)
 	if err != nil {
 		return xmlResponse{errorMessage: err.Error()}
 	}
 	return xmlResponse{status: http.StatusNoContent}
 }
 
-func (s *Server) checkUploadPreconditions(r *http.Request, bucketName string, objectName string) *jsonResponse {
-	ifGenerationMatch := r.URL.Query().Get("ifGenerationMatch")
-
-	if ifGenerationMatch == "0" {
-		if _, err := s.backend.GetObject(bucketName, objectName); err == nil {
-			return &jsonResponse{
-				status:       http.StatusPreconditionFailed,
-				errorMessage: "Precondition failed",
-			}
-		}
-	} else if ifGenerationMatch != "" || r.URL.Query().Get("ifGenerationNotMatch") != "" {
+func (s *Server) checkUnsupportedConditions(r *http.Request) *jsonResponse {
+	if r.URL.Query().Get("ifGenerationNotMatch") != "" {
 		return &jsonResponse{
 			status:       http.StatusNotImplemented,
 			errorMessage: "Precondition support not implemented",
 		}
 	}
-
 	return nil
 }
 
@@ -194,7 +189,11 @@ func (s *Server) simpleUpload(bucketName string, r *http.Request) jsonResponse {
 		},
 		Content: data,
 	}
-	obj, err = s.createObject(obj)
+	conditions, err := storageConditions(r)
+	if err != nil {
+		return errToJsonResponse(err)
+	}
+	obj, err = s.createObject(obj, conditions)
 	if err != nil {
 		return errToJsonResponse(err)
 	}
@@ -237,7 +236,11 @@ func (s *Server) signedUpload(bucketName string, r *http.Request) jsonResponse {
 		},
 		Content: data,
 	}
-	obj, err = s.createObject(obj)
+	conditions, err := storageConditions(r)
+	if err != nil {
+		return errToJsonResponse(err)
+	}
+	obj, err = s.createObject(obj, conditions)
 	if err != nil {
 		return errToJsonResponse(err)
 	}
@@ -300,7 +303,7 @@ func (s *Server) multipartUpload(bucketName string, r *http.Request) jsonRespons
 		objName = metadata.Name
 	}
 
-	if resp := s.checkUploadPreconditions(r, bucketName, objName); resp != nil {
+	if resp := s.checkUnsupportedConditions(r); resp != nil {
 		return *resp
 	}
 
@@ -317,7 +320,26 @@ func (s *Server) multipartUpload(bucketName string, r *http.Request) jsonRespons
 		},
 		Content: content,
 	}
-	obj, err = s.createObject(obj)
+	conditions, err := storageConditions(r)
+	if err != nil {
+		return errToJsonResponse(err)
+	}
+
+	obj, err = s.createObject(obj, conditions)
+
+	if _, ok := err.(*backend.DoesNotExistPreConditionError); ok {
+		return jsonResponse{
+			status:       http.StatusPreconditionFailed,
+			errorMessage: "Precondition failed",
+		}
+	}
+	if _, ok := err.(*backend.GenerationMatchPreConditionError); ok {
+		return jsonResponse{
+			status:       http.StatusPreconditionFailed,
+			errorMessage: "GenerationMatch precondition failed",
+		}
+	}
+
 	if err != nil {
 		return errToJsonResponse(err)
 	}
@@ -431,7 +453,11 @@ func (s *Server) uploadFileContent(r *http.Request) jsonResponse {
 	}
 	if commit {
 		s.uploads.Delete(uploadID)
-		obj, err = s.createObject(obj)
+		conditions, err := storageConditions(r)
+		if err != nil {
+			return errToJsonResponse(err)
+		}
+		obj, err = s.createObject(obj, conditions)
 		if err != nil {
 			return errToJsonResponse(err)
 		}
@@ -539,4 +565,23 @@ func generateUploadID() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", raw[:]), nil
+}
+
+func storageConditions(r *http.Request) (storage.Conditions, error) {
+	conditions := storage.Conditions{}
+	generationMatch := r.URL.Query().Get("ifGenerationMatch")
+
+	if generationMatch != "" {
+		if generationMatch == "0" {
+			conditions.DoesNotExist = true
+		} else {
+			if match, err := strconv.ParseInt(generationMatch, 10, 64); err == nil {
+				conditions.GenerationMatch = match
+			} else {
+				return conditions, err
+			}
+		}
+	}
+
+	return conditions, nil
 }

@@ -226,18 +226,18 @@ func (o *objectAttrsList) Swap(i int, j int) {
 //
 // If the bucket within the object doesn't exist, it also creates it. If the
 // object already exists, it overrides the object.
-func (s *Server) CreateObject(obj Object) {
-	_, err := s.createObject(obj)
+func (s *Server) CreateObject(obj Object, conditions storage.Conditions) {
+	_, err := s.createObject(obj, conditions)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (s *Server) createObject(obj Object) (Object, error) {
+func (s *Server) createObject(obj Object, conditions storage.Conditions) (Object, error) {
 	oldBackendObj, err := s.backend.GetObject(obj.BucketName, obj.Name)
 	prevVersionExisted := err == nil
 
-	newBackendObj, err := s.backend.CreateObject(toBackendObjects([]Object{obj})[0])
+	newBackendObj, err := s.backend.CreateObject(toBackendObjects([]Object{obj})[0], conditions)
 	if err != nil {
 		return Object{}, err
 	}
@@ -556,7 +556,7 @@ func (s *Server) setObjectACL(r *http.Request) jsonResponse {
 		Role:   role,
 	}}
 
-	_, err = s.createObject(obj)
+	_, err = s.createObject(obj, storage.Conditions{})
 	if err != nil {
 		return errToJsonResponse(err)
 	}
@@ -610,7 +610,12 @@ func (s *Server) rewriteObject(r *http.Request) jsonResponse {
 		Content: append([]byte(nil), obj.Content...),
 	}
 
-	_, err = s.createObject(newObject)
+	conditions, err := storageConditions(r)
+	if err != nil {
+		return errToJsonResponse(err)
+	}
+
+	_, err = s.createObject(newObject, conditions)
 	if err != nil {
 		return errToJsonResponse(err)
 	}
@@ -692,7 +697,11 @@ func (s *Server) patchObject(r *http.Request) jsonResponse {
 			errorMessage: "Metadata in the request couldn't decode",
 		}
 	}
-	backendObj, err := s.backend.PatchObject(bucketName, objectName, metadata.Metadata)
+	conditions, err := storageConditions(r)
+	if err != nil {
+		return errorResponseConditions(err)
+	}
+	backendObj, err := s.backend.PatchObject(bucketName, objectName, metadata.Metadata, conditions)
 	if err != nil {
 		return jsonResponse{
 			status:       http.StatusNotFound,
@@ -718,7 +727,11 @@ func (s *Server) updateObject(r *http.Request) jsonResponse {
 			errorMessage: "Metadata in the request couldn't decode",
 		}
 	}
-	backendObj, err := s.backend.UpdateObject(bucketName, objectName, metadata.Metadata)
+	conditions, err := storageConditions(r)
+	if err != nil {
+		return errorResponseConditions(err)
+	}
+	backendObj, err := s.backend.UpdateObject(bucketName, objectName, metadata.Metadata, conditions)
 	if err != nil {
 		return jsonResponse{
 			status:       http.StatusNotFound,
@@ -760,7 +773,11 @@ func (s *Server) composeObject(r *http.Request) jsonResponse {
 		sourceNames = append(sourceNames, n.Name)
 	}
 
-	backendObj, err := s.backend.ComposeObject(bucketName, sourceNames, destinationObject, composeRequest.Destination.Metadata, composeRequest.Destination.ContentType)
+	conditions, err := storageConditions(r)
+	if err != nil {
+		return errorResponseConditions(err)
+	}
+	backendObj, err := s.backend.ComposeObject(bucketName, sourceNames, destinationObject, composeRequest.Destination.Metadata, composeRequest.Destination.ContentType, conditions)
 	if err != nil {
 		return jsonResponse{
 			status:       http.StatusInternalServerError,
@@ -773,4 +790,11 @@ func (s *Server) composeObject(r *http.Request) jsonResponse {
 	s.eventManager.Trigger(&backendObj, notification.EventFinalize, nil)
 
 	return jsonResponse{data: newObjectResponse(obj.ObjectAttrs)}
+}
+
+func errorResponseConditions(err error) jsonResponse {
+	return jsonResponse{
+		status:       http.StatusInternalServerError,
+		errorMessage: fmt.Sprintf("Error occurred during ifGenerationMatch process %s", err.Error()),
+	}
 }
